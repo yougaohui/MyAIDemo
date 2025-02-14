@@ -35,8 +35,12 @@ transform = transforms.Compose([
 ])
 
 # 加载并预处理图像
-image = Image.open('./image/1.png')
-image = transform(image).unsqueeze(0)  # 增加批量维度
+image_path = './image/d.png'
+image = Image.open(image_path).convert('RGB')  # 将图像转换为RGB格式
+image = transform(image).unsqueeze(0)  # 增加批量维度，确保尺寸匹配
+
+# 检查输入张量的尺寸
+print("Input tensor size:", image.size())
 
 # 进行预测
 output = net(image)
