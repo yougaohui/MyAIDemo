@@ -1,48 +1,64 @@
 import torch
-from torch.utils.data import DataLoader
-from torchvision.datasets import MNIST
-from torchvision.transforms import ToTensor
+import torch.nn as nn
+import torch.nn.functional as F
+from torchvision import datasets, transforms
+from PIL import Image
+import numpy as np
 
-# 假设我们有一个模型定义
-class MyModel(torch.nn.Module):
+# 假设的模型定义
+class MyModel(nn.Module):
     def __init__(self):
         super(MyModel, self).__init__()
-        self.flatten = torch.nn.Flatten()
-        self.linear_relu_stack = torch.nn.Sequential(
-            torch.nn.Linear(28*28, 512),
-            torch.nn.ReLU(),
-            torch.nn.Linear(512, 512),
-            torch.nn.ReLU(),
-            torch.nn.Linear(512, 10)
-        )
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
+        self.bn2 = nn.BatchNorm2d(64)
+        self.fc1 = nn.Linear(64 * 7 * 7, 128)
+        self.fc2 = nn.Linear(128, 10)
 
     def forward(self, x):
-        x = self.flatten(x)
-        logits = self.linear_relu_stack(x)
-        return logits
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = F.relu(x)
+        x = F.max_pool2d(x, 2)
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = F.relu(x)
+        x = F.max_pool2d(x, 2)
+        x = x.view(x.size(0), -1)
+        x = self.fc1(x)
+        x = F.relu(x)
+        x = self.fc2(x)
+        return x
 
-# 加载测试数据
-test_dataset = MNIST(root='data', train=False, download=True, transform=ToTensor())
-test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
-
-# 初始化模型
+# 加载训练好的模型权重
 model = MyModel()
-model.load_state_dict(torch.load('./model.pth'))  # 假设模型权重已经保存在model.pth文件中
+model.load_state_dict(torch.load('./model.pth'))
 model.eval()  # 设置模型为评估模式
 
-# 测试模型
-def test_model(model, test_loader):
-    model.eval()  # 确保模型处于评估模式
-    correct = 0
-    total = 0
-    with torch.no_grad():  # 不需要计算梯度
-        for images, labels in test_loader:
-            outputs = model(images)
-            _, predicted = torch.max(outputs.data, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
+# 数据预处理
+transform = transforms.Compose([
+    transforms.Resize((28, 28)),
+    transforms.ToTensor(),
+    transforms.Normalize((0.1307,), (0.3081,))
+])
 
-    print(f'Accuracy of the model on the 10000 test images: {100 * correct / total}%')
+# 加载本地图像文件
+def load_image(image_path):
+    image = Image.open(image_path).convert('L')  # 转换为灰度图像
+    image = transform(image)
+    image = image.unsqueeze(0)  # 增加批次维度
+    return image
 
-# 运行测试
-test_model(model, test_loader)
+# 预测函数
+def predict(image_path):
+    image = load_image(image_path)
+    with torch.no_grad():
+        output = model(image)
+        _, predicted = torch.max(output.data, 1)
+    return predicted.item()
+
+# 示例：预测本地图像文件
+image_path = './dataset/test/images/frame_0.jpg'
+prediction = predict(image_path)
+print(f'Predicted class: {prediction}')
