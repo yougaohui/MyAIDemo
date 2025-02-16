@@ -36,15 +36,22 @@ class CustomDataset(Dataset):
         root = tree.getroot()
         boxes = []
         labels = []
+        class_to_idx = {'cat': 0, 'dog': 1}  # 根据实际类别定义映射
         for obj in root.findall('object'):
             label = obj.find('name').text
-            labels.append(label)
+            labels.append(class_to_idx[label])  # 转换为类别索引
             bbox = obj.find('bndbox')
             xmin = int(bbox.find('xmin').text)
             ymin = int(bbox.find('ymin').text)
             xmax = int(bbox.find('xmax').text)
             ymax = int(bbox.find('ymax').text)
             boxes.append([xmin, ymin, xmax, ymax])
+
+        # 确保 labels 是一个张量，并且形状为 [1]
+        labels = torch.tensor(labels, dtype=torch.long)
+        if labels.dim() == 0:
+            labels = labels.unsqueeze(0)
+
         return torch.tensor(boxes, dtype=torch.float32), labels
 
 # 数据预处理
@@ -74,7 +81,7 @@ for epoch in range(10):  # 训练10个epoch
     for images, boxes, labels in train_loader:
         optimizer.zero_grad()
         outputs = model(images)
-        loss = criterion(outputs, labels)
+        loss = criterion(outputs, labels.squeeze())  # 确保 labels 是一维张量
         loss.backward()
         optimizer.step()
         running_loss += loss.item()
@@ -94,7 +101,6 @@ with torch.no_grad():
         outputs = model(images)
         _, predicted = torch.max(outputs, 1)
         total += labels.size(0)
-        correct += (predicted == labels).sum().item()
+        correct += (predicted == labels.squeeze()).sum().item()  # 确保 labels 是一维张量
 
 print(f'Accuracy: {100 * correct / total}%')
-
