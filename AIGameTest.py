@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchvision import datasets, transforms
+from torchvision import transforms
 from PIL import Image
 import numpy as np
 
@@ -31,9 +31,29 @@ class MyModel(nn.Module):
         x = self.fc2(x)
         return x
 
-# 加载训练好的模型权重
+# 初始化模型
 model = MyModel()
-model.load_state_dict(torch.load('./model.pth'))
+
+# 加载权重文件
+state_dict = torch.load('model.pth')
+
+# 手动映射键
+new_state_dict = {}
+for key in state_dict.keys():
+    if key.startswith('module.'):
+        new_key = key[7:]  # 去掉 'module.' 前缀
+    else:
+        new_key = key
+    new_state_dict[new_key] = state_dict[key]
+
+# 加载新的 state_dict
+try:
+    model.load_state_dict(new_state_dict)
+except RuntimeError as e:
+    print(f"Error loading state_dict: {e}")
+    print("Attempting to load with strict=False...")
+    model.load_state_dict(new_state_dict, strict=False)
+
 model.eval()  # 设置模型为评估模式
 
 # 数据预处理
