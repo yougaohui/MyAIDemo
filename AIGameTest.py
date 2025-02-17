@@ -5,26 +5,25 @@ from torchvision import transforms
 from PIL import Image
 import numpy as np
 
-# 假设的模型定义
+# 调整后的模型定义
 class MyModel(nn.Module):
     def __init__(self):
         super(MyModel, self).__init__()
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1)
-        self.bn1 = nn.BatchNorm2d(32)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
-        self.bn2 = nn.BatchNorm2d(64)
+        self.layer1 = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.MaxPool2d(2)
+        )
         self.fc1 = nn.Linear(64 * 7 * 7, 128)
         self.fc2 = nn.Linear(128, 10)
 
     def forward(self, x):
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = F.relu(x)
-        x = F.max_pool2d(x, 2)
-        x = self.conv2(x)
-        x = self.bn2(x)
-        x = F.relu(x)
-        x = F.max_pool2d(x, 2)
+        x = self.layer1(x)
         x = x.view(x.size(0), -1)
         x = self.fc1(x)
         x = F.relu(x)
@@ -35,7 +34,7 @@ class MyModel(nn.Module):
 model = MyModel()
 
 # 加载权重文件
-state_dict = torch.load('model.pth')
+state_dict = torch.load('model.pth', map_location=torch.device('cpu'))
 
 # 手动映射键
 new_state_dict = {}
@@ -44,7 +43,7 @@ for key in state_dict.keys():
         new_key = key[7:]  # 去掉 'module.' 前缀
     else:
         new_key = key
-    new_state_dict[new_key] = state_dict[key]
+    new_state_dict[new_key] = state_dict[new_key]
 
 # 加载新的 state_dict
 try:
