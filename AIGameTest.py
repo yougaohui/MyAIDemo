@@ -1,10 +1,10 @@
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-# 在文件开头添加以下导入语句
 from PIL import Image
 import torchvision.transforms as transforms
-
+import xml.etree.ElementTree as ET
 
 
 # 定义一个简单的ResNet块
@@ -37,6 +37,7 @@ class BasicBlock(nn.Module):
         out = self.relu(out)
 
         return out
+
 
 # 定义ResNet模型
 class ResNet(nn.Module):
@@ -87,7 +88,9 @@ class ResNet(nn.Module):
 
         return x
 
-# 初始化模型
+    # 初始化模型
+
+
 model = ResNet(BasicBlock, [2, 2, 2, 2], num_classes=48)  # 修改输出类别数为48
 
 # 加载权重文件
@@ -102,7 +105,12 @@ for key in state_dict.keys():
         new_key = key
     new_state_dict[new_key] = state_dict[new_key]
 
-# 加载新的 state_dict
+# 打印 new_state_dict 的信息
+print("new_state_dict keys:")
+for key in new_state_dict.keys():
+    print(key)
+
+    # 加载新的 state_dict
 try:
     model.load_state_dict(new_state_dict)
 except RuntimeError as e:
@@ -114,10 +122,12 @@ model.eval()  # 设置模型为评估模式
 
 # 数据预处理
 transform = transforms.Compose([
-    transforms.Resize((224, 224)),  # ResNet通常需要224x224的输入
+    transforms.Resize(256),  # 先将短边调整到 256，保持宽高比
+    transforms.CenterCrop(224),  # 然后从中心裁剪出 224x224 的区域
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
+
 
 # 加载本地图像文件
 def load_image(image_path):
@@ -125,6 +135,7 @@ def load_image(image_path):
     image = transform(image)
     image = image.unsqueeze(0)  # 增加批次维度
     return image
+
 
 # 预测函数
 def predict(image_path):
@@ -134,7 +145,36 @@ def predict(image_path):
         _, predicted = torch.max(output.data, 1)
     return predicted.item()
 
+
+def get_class_names_from_annotations(annotations_dir):
+    class_names = set()  # 使用集合来存储类别名称，确保唯一性
+
+    # 遍历annotations目录下的所有XML文件
+    for filename in os.listdir(annotations_dir):
+        if filename.endswith('.xml'):
+            file_path = os.path.join(annotations_dir, filename)
+            tree = ET.parse(file_path)
+            root = tree.getroot()
+
+            # 查找所有的<object>标签，并从中提取类别名称
+            for obj in root.findall('object'):
+                class_name = obj.find('name').text
+                class_names.add(class_name)
+
+    # 将类别名称排序并返回
+    return sorted(list(class_names))
+
+# 假设annotations目录路径
+annotations_dir = './dataset/train/annotations'
+
+# 获取类别名称
+class_names = get_class_names_from_annotations(annotations_dir)
+
+# 打印类别名称
+print("Class names:", class_names)
+
 # 示例：预测本地图像文件
-image_path = './dataset/test/images/frame_30.jpg'
+image_path = './dataset/test/images/frame_0.jpg'
 prediction = predict(image_path)
-print(f'Predicted class: {prediction}')
+predicted_class_name = class_names[prediction]
+print(f'Predicted class: {predicted_class_name}')
