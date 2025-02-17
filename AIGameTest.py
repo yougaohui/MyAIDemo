@@ -91,7 +91,7 @@ class ResNet(nn.Module):
 model = ResNet(BasicBlock, [2, 2, 2, 2], num_classes=48)  # 修改输出类别数为48
 
 # 加载权重文件
-state_dict = torch.load('model.pth', map_location=torch.device('cpu'))
+state_dict = torch.load('model.pth')
 
 # 手动映射键
 new_state_dict = {}
@@ -135,6 +135,6 @@ def predict(image_path):
     return predicted.item()
 
 # 示例：预测本地图像文件
-image_path = './dataset/test/images/frame_0.jpg'
+image_path = './dataset/test/images/frame_30.jpg'
 prediction = predict(image_path)
 print(f'Predicted class: {prediction}')
