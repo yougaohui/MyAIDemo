@@ -6,7 +6,6 @@ from PIL import Image
 import torchvision.transforms as transforms
 import xml.etree.ElementTree as ET
 
-
 # 定义一个简单的ResNet块
 class BasicBlock(nn.Module):
     expansion = 1
@@ -37,7 +36,6 @@ class BasicBlock(nn.Module):
         out = self.relu(out)
 
         return out
-
 
 # 定义ResNet模型
 class ResNet(nn.Module):
@@ -88,9 +86,7 @@ class ResNet(nn.Module):
 
         return x
 
-    # 初始化模型
-
-
+# 初始化模型
 model = ResNet(BasicBlock, [2, 2, 2, 2], num_classes=48)  # 修改输出类别数为48
 
 # 加载权重文件
@@ -110,7 +106,7 @@ print("new_state_dict keys:")
 for key in new_state_dict.keys():
     print(key)
 
-    # 加载新的 state_dict
+# 加载新的 state_dict
 try:
     model.load_state_dict(new_state_dict)
 except RuntimeError as e:
@@ -128,14 +124,12 @@ transform = transforms.Compose([
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 
-
 # 加载本地图像文件
 def load_image(image_path):
     image = Image.open(image_path).convert('RGB')  # ResNet需要RGB图像
     image = transform(image)
     image = image.unsqueeze(0)  # 增加批次维度
     return image
-
 
 # 预测函数
 def predict(image_path):
@@ -144,7 +138,6 @@ def predict(image_path):
         output = model(image)
         _, predicted = torch.max(output.data, 1)
     return predicted.item()
-
 
 def get_class_names_from_annotations(annotations_dir):
     class_names = set()  # 使用集合来存储类别名称，确保唯一性
