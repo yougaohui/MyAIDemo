@@ -3,10 +3,13 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms, models
 from PIL import Image
 import xml.etree.ElementTree as ET
 from torch.nn.utils.rnn import pad_sequence
+
+
 
 # 定义数据集类
 class CustomDataset(Dataset):
@@ -81,8 +84,12 @@ def custom_collate_fn(batch):
 
 # 数据预处理
 transform = transforms.Compose([
-    transforms.Resize((224, 224)),
+    transforms.Resize((256, 256)),  # 调整到更大的尺寸
+    transforms.RandomCrop(224),  # 随机裁剪
+    transforms.RandomHorizontalFlip(),  # 随机水平翻转
+    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),  # 颜色抖动
     transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 
 # 加载数据集
@@ -96,14 +103,28 @@ test_loader = DataLoader(test_dataset, batch_size=4, shuffle=False, collate_fn=c
 model = models.resnet18(pretrained=True)
 model.fc = nn.Linear(model.fc.in_features, len(train_dataset.class_to_idx))  # 根据实际类别数量定义输出层
 
+# 添加Dropout层以防止过拟合
+model.fc = nn.Sequential(
+    nn.Dropout(0.5),
+    nn.Linear(model.fc.in_features, len(train_dataset.class_to_idx))
+)
+
 # 定义损失函数和优化器
 criterion = nn.CrossEntropyLoss(ignore_index=-1)  # 忽略填充值 -1
-optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+optimizer = optim.Adam(model.parameters(), lr=0.0001)  # 使用Adam优化器
+
+# 学习率调度器
+scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
+
+# 初始化TensorBoard
+writer = SummaryWriter()
 
 # 训练模型
-for epoch in range(10):  # 训练10个epoch
+num_epochs = 20  # 增加训练轮数
+for epoch in range(num_epochs):
+    model.train()
     running_loss = 0.0
-    for images, boxes, labels in train_loader:
+    for i, (images, boxes, labels) in enumerate(train_loader):
         optimizer.zero_grad()
         outputs = model(images)
         # 只使用第一个标签进行分类
@@ -111,8 +132,45 @@ for epoch in range(10):  # 训练10个epoch
         loss.backward()
         optimizer.step()
         running_loss += loss.item()
-    print(f'Epoch {epoch+1}, Loss: {running_loss/len(train_loader)}')
 
+        # 每10个batch记录一次损失
+        if i % 10 == 9:
+            writer.add_scalar('Training Loss', running_loss / 10, epoch * len(train_loader) + i)
+            running_loss = 0.0
+
+    # 更新学习率
+    scheduler.step()
+
+    # 计算训练集准确率
+    model.eval()
+    train_correct = 0
+    train_total = 0
+    with torch.no_grad():
+        for images, boxes, labels in train_loader:
+            outputs = model(images)
+            _, predicted = torch.max(outputs, 1)
+            train_total += labels.size(0)
+            train_correct += (predicted == labels[:, 0]).sum().item()
+
+    train_accuracy = 100 * train_correct / train_total
+    writer.add_scalar('Training Accuracy', train_accuracy, epoch)
+
+    # 计算测试集准确率
+    test_correct = 0
+    test_total = 0
+    with torch.no_grad():
+        for images, boxes, labels in test_loader:
+            outputs = model(images)
+            _, predicted = torch.max(outputs, 1)
+            test_total += labels.size(0)
+            test_correct += (predicted == labels[:, 0]).sum().item()
+
+    test_accuracy = 100 * test_correct / test_total
+    writer.add_scalar('Testing Accuracy', test_accuracy, epoch)
+
+    print(f'Epoch {epoch+1}, Training Loss: {running_loss/len(train_loader)}, Training Accuracy: {train_accuracy}%, Testing Accuracy: {test_accuracy}%')
+
+writer.close()
 print('Finished Training')
 
 # 保存模型
@@ -127,6 +185,6 @@ with torch.no_grad():
         outputs = model(images)
         _, predicted = torch.max(outputs, 1)
         total += labels.size(0)
-        correct += (predicted == labels[:, 0]).sum().item()  # 使用第一个标签进行分类
+        correct += (predicted == labels[:, 0]).sum().item()
 
-print(f'Accuracy: {100 * correct / total}%')
+print(f'Final Accuracy: {100 * correct / total}%')
