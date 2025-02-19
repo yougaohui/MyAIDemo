@@ -1,125 +1,67 @@
-import os
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from torch.utils.data import DataLoader
+from torchvision import transforms, models
 from PIL import Image
-import torchvision.transforms as transforms
-import torchvision.models.detection as detection_models
 import xml.etree.ElementTree as ET
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
+from train import CustomDataset, custom_collate_fn
+import torch.nn as nn
 
 # 数据预处理
 transform = transforms.Compose([
-    transforms.ToTensor()
+    transforms.Resize((256, 256)),  # 调整到更大的尺寸
+    transforms.CenterCrop(224),  # 中心裁剪
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 
-# 加载预训练的 Faster R-CNN 模型
-model = detection_models.fasterrcnn_resnet50_fpn(pretrained=True)
+# 加载数据集
+test_dataset = CustomDataset('dataset/test/images', 'dataset/test/annotations', transform=transform)
+test_loader = DataLoader(test_dataset, batch_size=4, shuffle=False, collate_fn=custom_collate_fn)
 
-# 修改模型以适应你的类别数
-num_classes = 49  # 包括背景类
-in_features = model.roi_heads.box_predictor.cls_score.in_features
+# 定义模型
+model = models.resnet18(pretrained=False)
+model.fc = nn.Sequential(
+    nn.Dropout(0.5),
+    nn.Linear(model.fc.in_features, len(test_dataset.class_to_idx))
+)
 
-# 替换 box_predictor 为与你的类别数兼容的结构
-model.roi_heads.box_predictor = detection_models.faster_rcnn.FastRCNNPredictor(in_features, num_classes)
+# 加载训练好的模型权重
+model.load_state_dict(torch.load('model.pth'))
+model.eval()
 
-# 加载训练好的权重
-state_dict = torch.load('model.pth')
+# 设备选择
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
 
-# 手动映射键
-new_state_dict = {}
-for key in state_dict.keys():
-    if key.startswith('module.'):
-        new_key = key[7:]  # 去掉 'module.' 前缀
-    else:
-        new_key = key
-    new_state_dict[new_key] = state_dict[new_key]
+# 模型评估
+correct = 0
+total = 0
+with torch.no_grad():
+    for images, boxes, labels in test_loader:
+        images = images.to(device)  # 将图像数据移动到设备
+        labels = labels.to(device)  # 将标签数据移动到设备
+        outputs = model(images)
+        _, predicted = torch.max(outputs, 1)
+        total += labels.size(0)
+        correct += (predicted == labels[:, 0]).sum().item()
 
-# 加载新的 state_dict
-try:
-    model.load_state_dict(new_state_dict)
-except RuntimeError as e:
-    print(f"Error loading state_dict: {e}")
-    print("Attempting to load with strict=False...")
-    model.load_state_dict(new_state_dict, strict=False)
+print(f'Final Accuracy: {100 * correct / total}%')
 
-model.eval()  # 设置模型为评估模式
-
-# 加载本地图像文件
-def load_image(image_path):
-    image = Image.open(image_path).convert('RGB')  # ResNet需要RGB图像
-    image_tensor = transform(image).unsqueeze(0)  # 增加批次维度
-    return image_tensor, image
-
-# 预测函数
-def predict_detection(image_tensor, model, class_names):
+# 单个图像推理示例
+def predict_single_image(image_path, model, transform, class_to_idx):
+    # 加载图像
+    image = Image.open(image_path).convert('RGB')
+    # 应用变换
+    image_tensor = transform(image).unsqueeze(0).to(device)
+    # 进行推理
     with torch.no_grad():
-        predictions = model(image_tensor)
+        output = model(image_tensor)
+        _, predicted = torch.max(output, 1)
+    # 获取预测类别
+    predicted_class = list(class_to_idx.keys())[list(class_to_idx.values()).index(predicted.item())]
+    return predicted_class
 
-        # 解析预测结果
-        boxes = predictions[0]['boxes'].cpu().numpy()
-        labels = predictions[0]['labels'].cpu().numpy()
-        scores = predictions[0]['scores'].cpu().numpy()
-
-        # 打印每个边界框及其类别
-        detections = []
-        for box, label, score in zip(boxes, labels, scores):
-            if score > 0.5:  # 只显示置信度大于0.5的结果
-                class_name = class_names[label]  # 目标检测模型的标签从1开始
-                detections.append((box, class_name, score))
-
-        return detections
-
-def get_class_names_from_annotations(annotations_dir):
-    class_names = ['__background__']  # 添加背景类
-
-    # 遍历annotations目录下的所有XML文件
-    for filename in os.listdir(annotations_dir):
-        if filename.endswith('.xml'):
-            file_path = os.path.join(annotations_dir, filename)
-            tree = ET.parse(file_path)
-            root = tree.getroot()
-
-            # 查找所有的<object>标签，并从中提取类别名称
-            for obj in root.findall('object'):
-                class_name = obj.find('name').text
-                if class_name not in class_names:
-                    class_names.append(class_name)
-
-    return class_names
-
-# 绘制检测结果
-def draw_detections(image, detections):
-    fig, ax = plt.subplots(1, figsize=(10, 10))
-    ax.imshow(image)
-
-    for box, class_name, score in detections:
-        xmin, ymin, xmax, ymax = box
-        rect = patches.Rectangle((xmin, ymin), xmax - xmin, ymax - ymin, linewidth=2, edgecolor='r', facecolor='none')
-        ax.add_patch(rect)
-        ax.text(xmin, ymin, f'{class_name} {score:.2f}', color='white', backgroundcolor='red', fontsize=12)
-
-    plt.axis('off')
-    plt.show()
-
-# 假设annotations目录路径
-annotations_dir = './dataset/train/annotations'
-
-# 获取类别名称
-class_names = get_class_names_from_annotations(annotations_dir)
-
-# 打印类别名称
-print("Class names:", class_names)
-
-# 示例：预测本地图像文件并处理多边界框
-image_path = './dataset/test/images/frame_4230.jpg'
-image_tensor, image = load_image(image_path)
-detections = predict_detection(image_tensor, model, class_names)
-
-print("Detections:")
-for box, class_name, score in detections:
-    print(f'Bounding Box: {box}, Predicted Class: {class_name}, Score: {score:.4f}')
-
-# 绘制检测结果
-draw_detections(image, detections)
+# 示例图像路径
+image_path = './dataset/test/images/frame_0.jpg'
+predicted_class = predict_single_image(image_path, model, transform, test_dataset.class_to_idx)
+print(f'Predicted class for {image_path}: {predicted_class}')
