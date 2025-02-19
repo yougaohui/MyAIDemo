@@ -4,92 +4,27 @@ import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
 import torchvision.transforms as transforms
+import torchvision.models.detection as detection_models
 import xml.etree.ElementTree as ET
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 
-# 定义一个简单的ResNet块
-class BasicBlock(nn.Module):
-    expansion = 1
+# 数据预处理
+transform = transforms.Compose([
+    transforms.ToTensor()
+])
 
-    def __init__(self, in_channels, out_channels, stride=1, downsample=None):
-        super(BasicBlock, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.relu = nn.ReLU(inplace=True)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(out_channels)
-        self.downsample = downsample
+# 加载预训练的 Faster R-CNN 模型
+model = detection_models.fasterrcnn_resnet50_fpn(pretrained=True)
 
-    def forward(self, x):
-        identity = x
+# 修改模型以适应你的类别数
+num_classes = 49  # 包括背景类
+in_features = model.roi_heads.box_predictor.cls_score.in_features
 
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
+# 替换 box_predictor 为与你的类别数兼容的结构
+model.roi_heads.box_predictor = detection_models.faster_rcnn.FastRCNNPredictor(in_features, num_classes)
 
-        out = self.conv2(out)
-        out = self.bn2(out)
-
-        if self.downsample is not None:
-            identity = self.downsample(x)
-
-        out += identity
-        out = self.relu(out)
-
-        return out
-
-# 定义ResNet模型
-class ResNet(nn.Module):
-    def __init__(self, block, layers, num_classes=10):
-        super(ResNet, self).__init__()
-        self.in_channels = 64
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)  # 修改输入通道数为3
-        self.bn1 = nn.BatchNorm2d(64)
-        self.relu = nn.ReLU(inplace=True)
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.layer1 = self._make_layer(block, 64, layers[0])
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
-        self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(512 * block.expansion, num_classes)  # 修改输出类别数为48
-
-    def _make_layer(self, block, out_channels, blocks, stride=1):
-        downsample = None
-        if stride != 1 or self.in_channels != out_channels * block.expansion:
-            downsample = nn.Sequential(
-                nn.Conv2d(self.in_channels, out_channels * block.expansion, kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(out_channels * block.expansion),
-            )
-
-        layers = []
-        layers.append(block(self.in_channels, out_channels, stride, downsample))
-        self.in_channels = out_channels * block.expansion
-        for _ in range(1, blocks):
-            layers.append(block(self.in_channels, out_channels))
-
-        return nn.Sequential(*layers)
-
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.maxpool(x)
-
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-
-        x = self.avgpool(x)
-        x = torch.flatten(x, 1)
-        x = self.fc(x)
-
-        return x
-
-# 初始化模型
-model = ResNet(BasicBlock, [2, 2, 2, 2], num_classes=48)  # 修改输出类别数为48
-
-# 加载权重文件
+# 加载训练好的权重
 state_dict = torch.load('model.pth')
 
 # 手动映射键
@@ -101,11 +36,6 @@ for key in state_dict.keys():
         new_key = key
     new_state_dict[new_key] = state_dict[new_key]
 
-# 打印 new_state_dict 的信息
-print("new_state_dict keys:")
-for key in new_state_dict.keys():
-    print(key)
-
 # 加载新的 state_dict
 try:
     model.load_state_dict(new_state_dict)
@@ -116,31 +46,33 @@ except RuntimeError as e:
 
 model.eval()  # 设置模型为评估模式
 
-# 数据预处理
-transform = transforms.Compose([
-    transforms.Resize(256),  # 先将短边调整到 256，保持宽高比
-    transforms.CenterCrop(224),  # 然后从中心裁剪出 224x224 的区域
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-])
-
 # 加载本地图像文件
 def load_image(image_path):
     image = Image.open(image_path).convert('RGB')  # ResNet需要RGB图像
-    image = transform(image)
-    image = image.unsqueeze(0)  # 增加批次维度
-    return image
+    image_tensor = transform(image).unsqueeze(0)  # 增加批次维度
+    return image_tensor, image
 
 # 预测函数
-def predict(image_path):
-    image = load_image(image_path)
+def predict_detection(image_tensor, model, class_names):
     with torch.no_grad():
-        output = model(image)
-        _, predicted = torch.max(output.data, 1)
-    return predicted.item()
+        predictions = model(image_tensor)
+
+        # 解析预测结果
+        boxes = predictions[0]['boxes'].cpu().numpy()
+        labels = predictions[0]['labels'].cpu().numpy()
+        scores = predictions[0]['scores'].cpu().numpy()
+
+        # 打印每个边界框及其类别
+        detections = []
+        for box, label, score in zip(boxes, labels, scores):
+            if score > 0.5:  # 只显示置信度大于0.5的结果
+                class_name = class_names[label]  # 目标检测模型的标签从1开始
+                detections.append((box, class_name, score))
+
+        return detections
 
 def get_class_names_from_annotations(annotations_dir):
-    class_names = set()  # 使用集合来存储类别名称，确保唯一性
+    class_names = ['__background__']  # 添加背景类
 
     # 遍历annotations目录下的所有XML文件
     for filename in os.listdir(annotations_dir):
@@ -152,10 +84,24 @@ def get_class_names_from_annotations(annotations_dir):
             # 查找所有的<object>标签，并从中提取类别名称
             for obj in root.findall('object'):
                 class_name = obj.find('name').text
-                class_names.add(class_name)
+                if class_name not in class_names:
+                    class_names.append(class_name)
 
-    # 将类别名称排序并返回
-    return sorted(list(class_names))
+    return class_names
+
+# 绘制检测结果
+def draw_detections(image, detections):
+    fig, ax = plt.subplots(1, figsize=(10, 10))
+    ax.imshow(image)
+
+    for box, class_name, score in detections:
+        xmin, ymin, xmax, ymax = box
+        rect = patches.Rectangle((xmin, ymin), xmax - xmin, ymax - ymin, linewidth=2, edgecolor='r', facecolor='none')
+        ax.add_patch(rect)
+        ax.text(xmin, ymin, f'{class_name} {score:.2f}', color='white', backgroundcolor='red', fontsize=12)
+
+    plt.axis('off')
+    plt.show()
 
 # 假设annotations目录路径
 annotations_dir = './dataset/train/annotations'
@@ -166,8 +112,14 @@ class_names = get_class_names_from_annotations(annotations_dir)
 # 打印类别名称
 print("Class names:", class_names)
 
-# 示例：预测本地图像文件
-image_path = './dataset/test/images/frame_0.jpg'
-prediction = predict(image_path)
-predicted_class_name = class_names[prediction]
-print(f'Predicted class: {predicted_class_name}')
+# 示例：预测本地图像文件并处理多边界框
+image_path = './dataset/test/images/frame_4230.jpg'
+image_tensor, image = load_image(image_path)
+detections = predict_detection(image_tensor, model, class_names)
+
+print("Detections:")
+for box, class_name, score in detections:
+    print(f'Bounding Box: {box}, Predicted Class: {class_name}, Score: {score:.4f}')
+
+# 绘制检测结果
+draw_detections(image, detections)
